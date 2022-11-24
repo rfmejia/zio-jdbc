@@ -9,7 +9,6 @@ object BuildHelper {
 
   private val versions: Map[String, String] = {
     import org.snakeyaml.engine.v2.api.{ Load, LoadSettings }
-
     import java.util.{ List => JList, Map => JMap }
     import scala.jdk.CollectionConverters._
 
@@ -17,11 +16,14 @@ object BuildHelper {
       .loadFromReader(scala.io.Source.fromFile(".github/workflows/ci.yml").bufferedReader())
     val yaml = doc.asInstanceOf[JMap[String, JMap[String, JMap[String, JMap[String, JMap[String, JList[String]]]]]]]
     val list = yaml.get("jobs").get("test").get("strategy").get("matrix").get("scala").asScala
-    list.map(v => (v.split('.').take(2).mkString("."), v)).toMap
+    list.map { v =>
+      val vs = v.split('.'); val init = vs.take(vs(0) match { case "2" => 2; case _ => 1 }); (init.mkString("."), v)
+    }.toMap
   }
 
   lazy val Scala212: String = versions("2.12")
   lazy val Scala213: String = versions("2.13")
+  lazy val Scala3: String   = versions("3")
 
   val SilencerVersion = "1.7.7"
 
@@ -168,7 +170,7 @@ object BuildHelper {
         List("2.12", "2.11+", "2.12+", "2.11-2.12", "2.12-2.13", "2.x")
       case Some((2, 13)) =>
         List("2.13", "2.11+", "2.12+", "2.13+", "2.12-2.13", "2.x")
-      case Some((3, 0))  =>
+      case Some((3, _))  =>
         List("dotty", "2.11+", "2.12+", "2.13+", "3.x")
       case _             =>
         List()
@@ -178,25 +180,31 @@ object BuildHelper {
 
   def stdSettings(prjName: String) =
     Seq(
-      name                                   := s"$prjName",
-      crossScalaVersions                     := Seq(Scala212, Scala213),
-      ThisBuild / scalaVersion               := Scala213,
-      ThisBuild / scalacOptions              := stdOptions ++ extraOptions(scalaVersion.value, optimize = !isSnapshot.value),
+      name                      := s"$prjName",
+      crossScalaVersions        := Seq(Scala212, Scala213, Scala3),
+      ThisBuild / scalaVersion  := Scala3,
+      ThisBuild / scalacOptions := stdOptions ++ extraOptions(scalaVersion.value, optimize = !isSnapshot.value),
       libraryDependencies ++= {
-        Seq(
-          "com.github.ghik" % "silencer-lib" % SilencerVersion % Provided cross CrossVersion.full,
-          compilerPlugin("com.github.ghik" % "silencer-plugin" % SilencerVersion cross CrossVersion.full)
-        )
+        if (scalaVersion.value == Scala3)
+          Seq(
+            "com.github.ghik" % s"silencer-lib_$Scala213" % SilencerVersion % Provided
+          )
+        else
+          Seq(
+            "com.github.ghik" % "silencer-lib"            % SilencerVersion % Provided cross CrossVersion.full,
+            compilerPlugin("com.github.ghik" % "silencer-plugin" % SilencerVersion cross CrossVersion.full)
+          )
       },
-      semanticdbEnabled                      := true,                        // enable SemanticDB
+      semanticdbEnabled         := scalaVersion.value != Scala3, // enable SemanticDB
       semanticdbOptions += "-P:semanticdb:synthetics:on",
-      semanticdbVersion                      := scalafixSemanticdb.revision, // use Scalafix compatible version
+      semanticdbVersion         := scalafixSemanticdb.revision,  // use Scalafix compatible version
+
       ThisBuild / scalafixScalaBinaryVersion := CrossVersion.binaryScalaVersion(scalaVersion.value),
       ThisBuild / scalafixDependencies ++= List(
         "com.github.liancheng" %% "organize-imports" % "0.5.0",
         "com.github.vovapolu"  %% "scaluzzi"         % "0.1.18"
       ),
-      Test / parallelExecution               := true,
+      Test / parallelExecution               := scalaVersion.value != Scala3,
       incOptions ~= (_.withLogRecompileOnMacro(false)),
       autoAPIMappings                        := true,
       unusedCompileDependenciesFilter -= moduleFilter("org.scala-js", "scalajs-library")
